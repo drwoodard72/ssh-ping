@@ -17,8 +17,11 @@ import (
 	"github.com/drwoodard72/ssh-ping/stats"
 )
 
+const version = "1.0.0"
+
 func main() {
 	// Define flags
+	versionFlag := flag.Bool("V", false, "print version and exit")
 	countFlag := flag.Int("c", 1000, "number of echo characters to send")
 	timeFlag := flag.Duration("t", 0, "time limit for echo test")
 	echoTimeoutFlag := flag.Duration("w", 10*time.Second, "per-echo timeout")
@@ -36,6 +39,11 @@ func main() {
 	verboseFlag := flag.Int("v", 0, "verbosity level (1 or 2)")
 
 	flag.Parse()
+
+	if *versionFlag {
+		fmt.Printf("ssh-ping %s\n", version)
+		os.Exit(0)
+	}
 
 	verbosity := *verboseFlag
 
