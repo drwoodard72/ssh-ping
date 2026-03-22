@@ -135,12 +135,14 @@ sync:
 			}
 		}
 
-		if verbose <= 1 && i%10 == 0 {
+		if verbose == 1 && i%10 == 0 {
 			fmt.Printf("\rEcho: %d sent, %d received", result.Sent, result.Received)
 		}
 	}
 
-	fmt.Println()
+	if verbose == 1 {
+		fmt.Println()
+	}
 
 	io.WriteString(shell, "\n")
 	io.WriteString(shell, "exit\n")

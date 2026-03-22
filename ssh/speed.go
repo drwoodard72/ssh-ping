@@ -53,11 +53,11 @@ func RunUploadTest(client *ssh.Client, remotePath string, sizeMB int) (float64, 
 		written += int64(n)
 	}
 
+	elapsed := time.Since(start)
 	if err := remoteFile.Close(); err != nil {
 		sfTPClient.Remove(remotePath)
 		return 0, fmt.Errorf("close failed: %w", err)
 	}
-	elapsed := time.Since(start)
 	sfTPClient.Remove(remotePath)
 
 	bytesSec := float64(written) / elapsed.Seconds()

@@ -40,6 +40,11 @@ type connectResult struct {
 func Connect(cfg Config) (*connectResult, error) {
 	addr := net.JoinHostPort(cfg.Host, fmt.Sprintf("%d", cfg.Port))
 
+	hostKeyCb, err := hostKeyCallback(cfg.Insecure)
+	if err != nil {
+		return nil, err
+	}
+
 	// Build auth methods in order: pubkey, keyboard-interactive, password
 	var authMethods []ssh.AuthMethod
 	var agentConn net.Conn
@@ -50,28 +55,48 @@ func Connect(cfg Config) (*connectResult, error) {
 		agentConn = conn
 	}
 
-	// Try password
 	if cfg.Password != "" {
 		authMethods = append(authMethods, ssh.Password(cfg.Password))
-	}
-
-	hostKeyCallback, err := hostKeyCallback(cfg.Insecure)
-	if err != nil {
-		if agentConn != nil {
-			agentConn.Close()
-		}
-		return nil, err
 	}
 
 	clientConfig := &ssh.ClientConfig{
 		User:            cfg.User,
 		Auth:            authMethods,
-		HostKeyCallback: hostKeyCallback,
+		HostKeyCallback: hostKeyCb,
 		Timeout:         cfg.Timeout,
 	}
 
-	if cfg.SOCKS5Proxy != "" {
-		dialer, err := proxy.SOCKS5("tcp", cfg.SOCKS5Proxy, nil, &net.Dialer{Timeout: cfg.Timeout})
+	result, err := dial(addr, cfg.SOCKS5Proxy, cfg.Timeout, clientConfig)
+	if err == nil {
+		result.agentConn = agentConn
+		return result, nil
+	}
+
+	// If auth failed and we skipped a passphrase-protected -i key because
+	// the agent was available, retry with the key loaded (prompt for passphrase).
+	if agentConn != nil && cfg.IdentFile != "" && isAuthError(err) {
+		fmt.Fprintf(os.Stderr, "Agent authentication failed, trying key file %s\n", cfg.IdentFile)
+		method, keyErr := loadPrivateKey(cfg.IdentFile, true)
+		if keyErr == nil {
+			clientConfig.Auth = []ssh.AuthMethod{method}
+			result, retryErr := dial(addr, cfg.SOCKS5Proxy, cfg.Timeout, clientConfig)
+			if retryErr == nil {
+				result.agentConn = agentConn
+				return result, nil
+			}
+			err = retryErr
+		}
+	}
+
+	if agentConn != nil {
+		agentConn.Close()
+	}
+	return nil, err
+}
+
+func dial(addr, socks5Proxy string, timeout time.Duration, clientConfig *ssh.ClientConfig) (*connectResult, error) {
+	if socks5Proxy != "" {
+		dialer, err := proxy.SOCKS5("tcp", socks5Proxy, nil, &net.Dialer{Timeout: timeout})
 		if err != nil {
 			return nil, fmt.Errorf("socks5 dialer: %w", err)
 		}
@@ -82,23 +107,22 @@ func Connect(cfg Config) (*connectResult, error) {
 		c, chans, reqs, err := ssh.NewClientConn(conn, addr, clientConfig)
 		if err != nil {
 			conn.Close()
-			if agentConn != nil {
-				agentConn.Close()
-			}
 			return nil, fmt.Errorf("ssh handshake failed: %w", err)
 		}
-		return &connectResult{client: ssh.NewClient(c, chans, reqs), agentConn: agentConn}, nil
+		return &connectResult{client: ssh.NewClient(c, chans, reqs)}, nil
 	}
 
 	client, err := ssh.Dial("tcp", addr, clientConfig)
 	if err != nil {
-		if agentConn != nil {
-			agentConn.Close()
-		}
 		return nil, fmt.Errorf("dial failed: %w", err)
 	}
+	return &connectResult{client: client}, nil
+}
 
-	return &connectResult{client: client, agentConn: agentConn}, nil
+func isAuthError(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "unable to authenticate") ||
+		strings.Contains(msg, "no supported methods remain")
 }
 
 // publicKeyAuth returns auth methods and optionally the SSH agent connection
@@ -117,9 +141,10 @@ func publicKeyAuth(identFile string) ([]ssh.AuthMethod, net.Conn, error) {
 		}
 	}
 
-	// If a specific identity file is provided, always try it
+	// If a specific identity file is provided, try loading it.
+	// Only prompt for passphrase if no agent is available to fall back on.
 	if identFile != "" {
-		if method, err := loadPrivateKey(identFile); err == nil {
+		if method, err := loadPrivateKey(identFile, agentConn == nil); err == nil {
 			methods = append(methods, method)
 		}
 	}
@@ -130,7 +155,7 @@ func publicKeyAuth(identFile string) ([]ssh.AuthMethod, net.Conn, error) {
 		if err == nil {
 			for _, name := range []string{"id_rsa", "id_ecdsa", "id_ed25519"} {
 				keyPath := filepath.Join(homeDir, ".ssh", name)
-				method, err := loadPrivateKey(keyPath)
+				method, err := loadPrivateKey(keyPath, true)
 				if err == nil {
 					methods = append(methods, method)
 					break
@@ -146,7 +171,7 @@ func publicKeyAuth(identFile string) ([]ssh.AuthMethod, net.Conn, error) {
 	return methods, agentConn, nil
 }
 
-func loadPrivateKey(path string) (ssh.AuthMethod, error) {
+func loadPrivateKey(path string, promptForPassphrase bool) (ssh.AuthMethod, error) {
 	keyBytes, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -157,7 +182,10 @@ func loadPrivateKey(path string) (ssh.AuthMethod, error) {
 		return ssh.PublicKeys(signer), nil
 	}
 
-	// Key is passphrase protected, prompt for passphrase
+	if !promptForPassphrase {
+		return nil, fmt.Errorf("key %s is passphrase-protected, skipping (agent available)", path)
+	}
+
 	passphrase, err := promptPassphrase(path)
 	if err != nil {
 		return nil, err

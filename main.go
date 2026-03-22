@@ -22,7 +22,7 @@ const version = "1.0.0"
 func main() {
 	// Define flags
 	versionFlag := flag.Bool("V", false, "print version and exit")
-	countFlag := flag.Int("c", 1000, "number of echo characters to send")
+	countFlag := flag.Int("c", 100, "number of echo characters to send")
 	timeFlag := flag.Duration("t", 0, "time limit for echo test")
 	echoTimeoutFlag := flag.Duration("w", 10*time.Second, "per-echo timeout")
 	sizeFlag := flag.Int("s", 8, "size in MB for speed test")

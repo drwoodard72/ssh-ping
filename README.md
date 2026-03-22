@@ -36,7 +36,7 @@ ssh-ping [options] [user@]host[:port]
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `-c` | 1000 | Number of echo characters to send |
+| `-c` | 100 | Number of echo characters to send |
 | `-t` | 0 | Time limit for echo test (e.g. `30s`, `5m`) |
 | `-w` | 10s | Per-echo timeout |
 | `-s` | 8 | Size in MB for speed test |
